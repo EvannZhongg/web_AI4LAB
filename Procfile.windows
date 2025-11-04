@@ -1,0 +1,21 @@
+# 1. Django Web Server
+django: python manage.py runserver
+
+# 2. Celery Worker (Stage 1 + Orchestrator)
+# (Listens to 'celery' queue for new tasks and 'stage1_text' for processing)
+celery_s1: celery -A demo_web worker -l info -P gevent -c 1 -Q celery,stage1_text
+
+# 3. Celery Worker (Stage 2: VLM)
+celery_s2: celery -A demo_web worker -l info -P gevent -c 1 -Q stage2_vlm
+
+# 4. Celery Worker (Stage 3: Chunking)
+celery_s3: celery -A demo_web worker -l info -P gevent -c 1 -Q stage3_chunking
+
+# 5. Celery Worker (Stage 4: Extraction + Merging)
+celery_s4: celery -A demo_web worker -l info -P gevent -c 1 -Q stage4_extraction
+
+# 6. Celery Worker (Stage 5: Param Extraction)
+celery_s5: celery -A demo_web worker -l info -P gevent -c 1 -Q stage5_param_extraction
+
+# 7. Celery Worker (Stage 6: Param Fusion + Refinement)
+celery_s6: celery -A demo_web worker -l info -P gevent -c 1 -Q stage6_param_fusion
