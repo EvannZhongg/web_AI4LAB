@@ -70,18 +70,19 @@ def dump_json_pretty(obj: dict, file_path: Path):
     自定义 JSON Dumper，使源块列表更紧凑。
     """
     text = json.dumps(obj, indent=2, ensure_ascii=False)
-    # 正则表达式查找 "source_chunks": [\n...]"
+
+    # 修正：正则表达式查找 "source_chunks": [\n...]"
+    # 1. 移除了 lambda 表达式末尾多余的 + ']'
     text = re.sub(
         r'("source_chunks": \[\n\s*)((?:.|\n)*?)(\n\s*\])',
-        lambda m: m.group(1).replace('\n', ' ') +
-                  m.group(2).replace('\n', '').replace(' ', '') +
-                  m.group(3).replace('\n', ' ').strip() + ']',
+        lambda m: m.group(1).replace('\n', ' ') +  # "source_chunks": [
+                  m.group(2).replace('\n', '').replace(' ', '') +  # "1","2"
+                  m.group(3).replace('\n', ' ').strip(),  # ] (已移除多余的 + ']')
         text
     )
-    # 您的原始清理规则（可能已不再需要，但保留以防万一）
-    text = text.replace('[\n          "', '["') \
-        .replace('",\n          "', '", "') \
-        .replace('"\n        ]', '"]')
+
+
+
     file_path.write_text(text, encoding="utf-8")
 
 

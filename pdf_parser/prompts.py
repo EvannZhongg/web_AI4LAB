@@ -484,3 +484,205 @@ Follow these specific guidelines based on the hint:
 You MUST call either `record_resolved_parameter` or `get_chunk_contexts`.
 REMINDER: 'value' in 'final_entries' must be a string (or JSON null which script will stringify).
 """
+
+# --- 阶段7 (图片关联) ---
+
+def get_image_title_generation_prompt(image_description: str) -> str:
+    """
+    为 LLM 生成图片标题构建提示词。
+    """
+    return f"""
+    请根据以下电子数据手册中图片的描述，为其生成一个简洁且具有描述性的标题。
+    这个标题将用作JSON对象中的键名，因此应避免使用不适合做键名的特殊字符（例如过多的引号、换行符），并保持相对简短。
+
+    图片描述:
+    "{image_description}"
+
+    请直接返回生成的标题字符串。例如: "电源电压与输出电流关系图"
+    """
+
+def get_image_association_prompt(
+        image_title: str,
+        image_description: str,
+        image_applicable_models: List[str],
+        all_device_names: List[str],
+        image_id_for_log: str
+    ) -> str:
+    """
+    为 LLM 决策图片关联构建提示词。
+    """
+    return f"""
+    您是一位电子元器件数据手册分析专家。
+    请根据以下图片信息和数据手册中提取的器件型号列表，判断该图片具体与列表中的哪些器件型号精确相关。
+
+    图片信息:
+    - 图片标识 (Image ID/Filename): {image_id_for_log}
+    - 图片标题 (Title): "{image_title}" 
+    - 图片描述 (Description): "{image_description}"
+    - 图片中提及的适用型号 (VLM-Extracted Models): {json.dumps(image_applicable_models, ensure_ascii=False)}
+
+    数据手册中所有已知的器件型号列表 (您必须从此列表中选择):
+    {json.dumps(all_device_names, ensure_ascii=False)}
+
+    分析与决策步骤:
+    1.  **初步候选确定**: 
+        * 首先，查看图片信息中的 "VLM-Extracted Models"。这些型号（可能是系列名如 "UD1006", 或具体型号如 "UD1006FR"）是主要的关联依据。
+        * 如果 "VLM-Extracted Models" 包含 "all"，则您的初步候选列表就是 "数据手册中所有已知的器件型号列表" 中的全部型号。
+        * 如果不是 "all"，则从 "数据手册中所有已知的器件型号列表" 中，找出所有与 "VLM-Extracted Models" 中的条目 **精确匹配** 或 **以此为前缀** (例如 "UD1006" 匹配 "UD1006FR") 的型号，形成一个初步候选列表。
+
+    2.  **精确细节筛选 (关键步骤)**:
+        * 仔细检查图片的 "Title" (首要) 和 "Description" (次要) 是否包含任何可以进一步缩小初步候选范围的特定细节。这些细节可能包括封装信息 (例如 "(-210 Package)", "-SOIC", "QFN")、版本号、特定参数或任何其他能区分具体子型号的标识。
+        * **如果存在这类特定细节，必须使用它们来严格筛选初步候选列表。只有那些完整包含或精确对应这些细节的型号才应被保留。**
+        * **示例**:
+            * 图片标题是: "Figure 3. Maximum CW Input Power vs Case Temperature (TO-220 Package)"
+            * "VLM-Extracted Models" 是: ["APD0505", "APD0510"]
+            * 假设初步候选列表（基于 "APD0505", "APD0510"）是: ["APD0505-TO220", "APD0505-QFN", "APD0510-TO220", "APD0510-DFN"]。
+            * 由于标题中明确包含 "(TO-220 Package)"，您应该从初步候选列表中筛选出那些包含 "TO220" 的型号。因此，最终结果应为 ["APD0505-TO220", "APD0510-TO220"]。
+
+    3.  **通用图片处理**:
+        * 如果图片非常通用（例如公司Logo、不指明任何型号或系列的通用框图），并且其 "Title" 和 "Description" 中没有特定型号信息，则关联决策主要依赖 "VLM-Extracted Models"。
+
+    4.  **最终输出**:
+        * 根据以上分析，返回一个精确的、经过筛选的器件型号列表。
+
+    输出要求:
+    请返回一个JSON格式的列表，其中包含所有与此图片相关的器件型号名称 (从上面提供的"数据手册中所有已知的器件型号列表"中选择)。
+    例如: ["DeviceName1", "DeviceName2"]
+    如果图片不与任何列出的器件型号相关，或者无法判断，请返回一个空列表: []
+    确保输出是纯粹的JSON列表，不包含任何额外的解释性文本或Markdown标记。
+    """
+
+
+# --- 阶段8 (厂商标准化) ---
+
+def get_manufacturer_standardization_prompt(original_name: str, best_match_name: str, canonical_name: str, score: float) -> str:
+    """
+    为 LLM 决策厂商名称是否一致构建提示词。
+    """
+    return f"""
+    您是一位数据标准化专家。请判断以下两个电子产品制造商名称是否指向同一实体。
+
+    - 原始提取名称: '{original_name}'
+    - 知识库中最相似的名称: '{best_match_name}' (其标准名称为: '{canonical_name}')
+    - 相似度得分: {score:.4f}
+
+    这两个名称是否指代同一个公司实体？
+    请仅回答 "YES" 或 "NO"。
+    """
+
+
+# --- 阶段9 (器件分类) ---
+
+def get_classification_prompt(
+        context: str,
+        level_name: str,
+        options_list: List,
+        previous_choices: Dict = None
+) -> str:
+    """
+    为 LLM 决策器件分类构建提示词。
+    """
+    previous_choices_text = f"已确定的上级分类: {previous_choices}" if previous_choices else "你正在决定一级分类。"
+
+    # 将选项列表转换为字符串
+    options_str = "\n".join(f"- {opt}" for opt in options_list)
+
+    prompt = f"""
+你是一个精确的分类机器人。你的唯一任务是从给定的“有效选项”列表中，精确地选择一个最能描述当前器件的条目。
+
+# 器件信息
+{context}
+
+# 上下文
+{previous_choices_text}
+
+# 任务和规则
+1. 你的目标是为“{level_name}”选择一个值。
+2. 你 **必须** 从下面的“有效选项”列表中选择一个完全匹配的字符串。
+3. 你的回答 **必须只包含** 所选的那个字符串本身，不包含任何解释、标点、介绍性文字或任何其他字符。
+4. **绝对禁止** 创建新的分类或使用同义词。如果设备是“功率MOSFET”，而“MOSFET”是列表中的一个选项，你 **必须** 选择并返回 "MOSFET"。
+
+---有效选项---
+{options_str}
+---有效选项结束---
+"""
+    return prompt
+
+
+
+# --- 阶段RAG (检索) ---
+
+def get_rag_entity_extraction_prompt(query: str) -> str:
+    """
+    为RAG构建实体提取提示词。
+    (来自您的 retriever.py)
+    """
+    return f"""
+---
+# 角色 (Role)
+你是一个用于检索增强生成（RAG）系统的高智能查询分析引擎。
+
+# 首要目标 (Primary Goal)
+你的核心任务是，精准、全面地识别并抽取出用户查询语句中作为**问题核心主语**的关键概念或实体（Entities）。这些是你系统需要去检索信息的核心目标。
+
+# “核心主语/实体”的定义 (Definition of a Core Subject/Entity)
+一个核心主语/实体，应该是查询中有明确指代意义的名词或专有名词。一个简单的判断标准是：“如果要在维基百科或谷歌上搜索这个问题的答案，最核心的搜索词是什么？”
+它通常属于以下几类：
+1.  **具体事物**: 人名、地名、组织机构名、产品名、型号代码等。
+2.  **作品/事件**: 歌曲名、书名、电影名、法规标准、历史事件、项目名称等。
+3.  **抽象概念**: 技术术语、科学理论、商业策略、专业名词等。
+4.  **角色或类别 (新增)**: 代表一类人、职业、物体或概念的通用名词，当它成为查询的焦点时。例如：**电工**、螺丝刀、可持续发展。
+
+# 关键指令与规则 (Key Instructions & Rules)
+1.  **识别主语，而非意图**: 专注于提取问题“关于什么”的名词，而不是用户的行为或问题类型（如“比较”、“是什么”、“如何评价”、“帮我找”）。
+2.  **处理宽泛问题**: 对于宽泛的、主题性的问题，你的任务是抽取出其**核心主题**作为实体。例如，从“我想了解一些关于市场营销的知识”中，应提取出“市场营销”。
+3.  **多语言处理**: 查询可能包含多种语言。实体必须以其**原始语言**被提取，并保留重音符号和特殊字符。
+4.  **精确与完整**: 优先提取代表单个概念的多词短语，而不是将其拆分为单个词。
+5.  **排除项**: **必须避免**提取那些只表达用户意图或作为句子结构的、非核心的词语。例如，在“帮我介绍一位格斗选手”中，“介绍”、“一位”是功能性的，而“格斗选手”是核心主语，因此只提取“格斗选手”。
+6.  **严格的输出格式**:
+    - **必须**返回一个严格的JSON数组（List of strings）。
+    - 如果没有找到任何实体，**必须**返回一个空的JSON数组 `[]`。
+    - **绝对不能**在JSON之外包含任何解释、注释或Markdown标记。
+
+# 任务开始 (Task Start)
+请根据以上所有定义、规则和示例，处理以下用户查询。
+
+用户查询: "{query}"
+提取的实体 (JSON 格式):
+"""
+
+def get_rag_final_answer_prompt(query: str, paths_context: str, chunks_context: str) -> str:
+    """
+    为RAG构建最终答案合成提示词。
+    (来自您的 retriever.py)
+    """
+    return f"""
+---
+# 角色 (Role)
+你是一位知识渊博、逻辑严谨的AI知识助手。你的任务是基于我提供的结构化上下文，清晰、全面、深入地回答用户的原始问题。
+
+# 核心指令 (Core Instructions)
+1.  **忠于上下文**: 你的回答必须 **完全** 且 **仅** 基于下面提供的“文本证据”和“知识图谱路径”。**严禁**使用任何你自己的先验知识。如果上下文中没有足够信息来回答问题，请明确指出“根据所提供的资料，无法回答该问题”。
+2.  **综合与推理**: 不要简单地复述原文。你需要综合、提炼并推理所有上下文信息。特别是，要利用“知识图谱路径”来理解实体之间的逻辑关系，并用“文本证据”来填充这些关系的细节和具体描述。
+3.  **结构化回答**: 你的回答应该条理清晰，结构分明。可以使用标题、列表（如1, 2, 3）或要点（-）来组织内容，使用户一目了然。
+4.  **生成对比表格 (如果适用)**: 如果问题涉及对比，你必须创建一个Markdown表格。
+5.  **图片处理**: 如果一个节点的值或者证据的文本内容包含图片路径（例如以 `.png`, `.jpg` 等结尾），你应该说“（图片标题）如下所示：”或类似的话，然后**另起一行**，必须严格使用标准的Markdown语法 `![图片标题](图片路径)` 来格式化并展示图片，不允许直接输出图片路径。
+6.  **语言流畅**: 使用专业、客观且流畅的语言进行回答。
+
+# 上下文信息 (Context Provided)
+
+---
+## 知识图谱路径 (Knowledge Graph Paths)
+{paths_context}
+---
+## 文本证据 (Textual Evidence)
+{chunks_context}
+---
+
+# 任务 (Task)
+现在，请根据以上提供的全部上下文信息，回答用户的原始问题。
+
+**用户的原始问题是**: "{query}"
+
+**你的回答**:
+"""

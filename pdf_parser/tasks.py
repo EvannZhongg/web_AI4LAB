@@ -4,10 +4,14 @@ from .utils import process_pdf_task_logic
 from .vlm_client import analyze_chart_with_vlm
 from .chunking import process_markdown_to_chunks
 from .extraction import process_chunks_for_model_extraction
-from .merging import process_model_merging  # <--- 仍然需要导入
+from .merging import process_model_merging
 from .param_extraction import process_parameter_extraction
 from .param_fusion import process_parameter_fusion
 from .param_fusion_refinement import process_parameter_fusion_refinement
+from .image_association import process_image_association
+from .manufacturer_standardization import process_manufacturer_standardization
+from .classification import process_device_classification
+from .graph_construction import process_graph_construction
 from django.conf import settings
 from django.core.files.base import ContentFile
 import os
@@ -44,30 +48,34 @@ def cleanup_generated_files(output_dir):
             logger.error(f"无法清理目录 {output_dir}: {e}")
 
 
-# --- 编排器任务：启动流水线 (修正为6阶段) ---
+# --- 编排器任务：启动流水线 (修正为10阶段) ---
 @shared_task(bind=True)
 def task_pipeline(self, task_db_id):
     """
-    这是主编排器。它根据设置构建一个 6 阶段任务链。
+    这是主编排器。它根据设置构建一个 10 阶段任务链。
     """
     try:
         task = PDFParsingTask.objects.get(id=task_db_id)
 
         stage1 = run_text_analysis_task.s()
         stage3 = run_chunking_task.s()
-        stage4 = run_model_extraction_task.s()  # (抽取 + 融合)
-        stage5 = run_param_extraction_task.s()  # (参数提取)
-        stage6 = run_param_fusion_task.s()  # (参数融合 + 细化)
+        stage4 = run_model_extraction_task.s()
+        stage5 = run_param_extraction_task.s()
+        stage6 = run_param_fusion_task.s()
+        stage7 = run_image_association_task.s()
+        stage8 = run_manufacturer_standardization_task.s()
+        stage9 = run_classify_device_task.s()
+        stage10 = run_graph_construction_task.s() # <--- 新增
 
         if settings.PDF_PARSER_SAVE_PAGES:
             stage2 = run_vlm_analysis_task.s()
-            # 构建链: 1 -> 2 -> 3 -> 4 -> 5 -> 6
-            pipeline = chain(stage1, stage2, stage3, stage4, stage5, stage6)
+            # 构建链: 1 -> 2 -> ... -> 8 -> 9 -> 10
+            pipeline = chain(stage1, stage2, stage3, stage4, stage5, stage6, stage7, stage8, stage9, stage10) # <--- 修改
         else:
-            # 构建链: 1 -> 3 -> 4 -> 5 -> 6
-            pipeline = chain(stage1, stage3, stage4, stage5, stage6)
+            # 构建链: 1 -> 3 -> ... -> 8 -> 9 -> 10
+            pipeline = chain(stage1, stage3, stage4, stage5, stage6, stage7, stage8, stage9, stage10) # <--- 修改
 
-        logger.info(f"为任务 {task_db_id} 创建 6 阶段流水线: {pipeline}")
+        logger.info(f"为任务 {task_db_id} 创建 10 阶段流水线: {pipeline}") # <--- 修改
 
         pipeline.apply_async(args=[task_db_id])
 
@@ -78,7 +86,6 @@ def task_pipeline(self, task_db_id):
         task.status = PDFParsingTask.Status.FAILED
         task.error_message = f"[流水线启动失败] {e}"
         task.save(update_fields=['status', 'error_message'])
-
 
 # --- 阶段1：文本解析 (保持不变) ---
 @shared_task(bind=True)
@@ -382,7 +389,7 @@ def run_param_extraction_task(self, task_db_id):
         )
 
         logger.info(f"任务 {task_db_id} 参数提取完成，传递到下一阶段。")
-        return task_db_id  # <--- **关键修复**：添加 return
+        return task_db_id  # <--- **关键修复**：添加这一行
 
     except Exception as e:
         logger.error(f"任务 {task_db_id} (参数提取) 失败: {e}", exc_info=True)
@@ -392,12 +399,12 @@ def run_param_extraction_task(self, task_db_id):
         raise
 
 
-# --- 阶段6：参数融合 (原阶段7) ---
+# --- 阶段6：参数融合  ---
 @shared_task(bind=True)
 def run_param_fusion_task(self, task_db_id):
     """
     阶段6：参数融合（包含步骤1：聚合 和 步骤2：LLM细化）。
-    这是流水线的最后一站。
+    (修改：不再是流水线的最后一站)
     """
     if task_db_id is None:
         logger.info("参数融合阶段跳过，因为任务是重复的。")
@@ -416,6 +423,7 @@ def run_param_fusion_task(self, task_db_id):
 
     try:
         # --- 步骤 1: 聚合 ---
+        # ... (聚合代码不变) ...
         logger.info(f"阶段6.1 (聚合) 子任务开始: {task_db_id}")
         results_dir_abs_path_str = os.path.join(settings.MEDIA_ROOT, task.output_directory, "results")
         param_results_dir = os.path.join(results_dir_abs_path_str, "param_results")
@@ -429,6 +437,7 @@ def run_param_fusion_task(self, task_db_id):
         logger.info(f"阶段6.1 (聚合) 子任务完成: {task_db_id}")
 
         # --- 步骤 2: LLM 细化 ---
+        # ... (细化代码不变) ...
         logger.info(f"阶段6.2 (LLM细化) 子任务开始: {task_db_id}")
 
         llm_config = {
@@ -445,16 +454,292 @@ def run_param_fusion_task(self, task_db_id):
         )
         logger.info(f"阶段6.2 (LLM细化) 子任务完成: {task_db_id}")
 
-        # --- 阶段6 结束 ---
-        task.status = PDFParsingTask.Status.COMPLETED
-        task.save(update_fields=['status', 'updated_at'])
-
-        logger.info(f"任务 {task_db_id} 参数融合与细化完成。流水线结束。")
-        return f"Success (Param Fusion Complete)"
+        # --- 阶段6 结束 (修改) ---
+        # 移除 task.status = PDFParsingTask.Status.COMPLETED
+        # 移除 task.save(...)
+        logger.info(f"任务 {task_db_id} 参数融合与细化完成。传递到阶段7。")
+        return task_db_id  # <--- 必须返回 task_db_id 给阶段7
 
     except Exception as e:
         logger.error(f"任务 {task_db_id} (参数融合/细化) 失败: {e}", exc_info=True)
         task.status = PDFParsingTask.Status.FAILED
         task.error_message = f"[参数融合/细化失败] {e}"
+        task.save(update_fields=['status', 'error_message'])
+        raise
+
+
+# --- 阶段7：图片关联 ---
+@shared_task(bind=True)
+def run_image_association_task(self, task_db_id):
+    """
+    阶段7：图片关联。
+    (修改：不再是流水线的最后一站)
+    """
+    if task_db_id is None:
+        logger.info("图片关联阶段跳过，因为任务是重复的。")
+        return None
+
+    try:
+        task = PDFParsingTask.objects.get(id=task_db_id)
+        task.celery_task_id = self.request.id
+        task.status = PDFParsingTask.Status.IMAGE_ASSOCIATION
+        task.save(update_fields=['celery_task_id', 'status'])
+        logger.info(f"阶段7 (图片关联) 开始: {task_db_id}")
+    except PDFParsingTask.DoesNotExist:
+        logger.error(f"Image Association 任务 {task_db_id} 开始时未找到。")
+        return
+
+    try:
+        results_dir_abs_path_str = os.path.join(settings.MEDIA_ROOT, task.output_directory, "results")
+
+        # ... (检查阶段6输出是否存在) ...
+        resolved_dir = os.path.join(results_dir_abs_path_str, "param_results", "resolved")
+        if not os.path.exists(resolved_dir):
+            raise FileNotFoundError(f"阶段6的输出目录 'resolved' 物理丢失: {resolved_dir}")
+
+        # 检查阶段2的输出是否存在 (如果VLM开启)
+        vlm_skipped = False
+        if settings.PDF_PARSER_SAVE_PAGES:
+            image_desc_file = os.path.join(results_dir_abs_path_str, "image_descriptions.json")
+            if not os.path.exists(image_desc_file):
+                logger.warning(f"VLM已启用，但 'image_descriptions.json' 未找到。跳过图片关联。")
+                vlm_skipped = True
+        else:
+            logger.info("VLM未启用，跳过图片关联。")
+            vlm_skipped = True
+
+        if vlm_skipped:
+            # 复制 resolved -> resolved_with_images 以便阶段8可以继续
+            try:
+                target_dir = os.path.join(results_dir_abs_path_str, "param_results", "resolved_with_images")
+                if os.path.exists(target_dir):
+                    shutil.rmtree(target_dir)  # 清理旧的
+                shutil.copytree(resolved_dir, target_dir)
+                logger.info(f"VLM跳过，已复制 'resolved' 到 'resolved_with_images' 供下一阶段使用。")
+            except Exception as e:
+                logger.error(f"复制 'resolved' 目录失败: {e}")
+                raise
+
+            logger.info(f"任务 {task_db_id} (图片关联) 跳过。传递到阶段8。")
+            return task_db_id  # <--- 传递ID
+
+        # --- 如果 VLM 没跳过，执行正常逻辑 ---
+
+        # 准备配置
+        llm_config = {
+            "api_key": settings.DEFAULT_LLM_API_KEY,
+            "base_url": settings.DEFAULT_LLM_API_URL,
+            "model_name": settings.DEFAULT_LLM_MODEL_NAME
+        }
+        assoc_config = settings.PDF_PARSER_IMAGE_ASSOCIATION
+
+        # 执行阶段7逻辑
+        process_image_association(
+            results_dir_path=results_dir_abs_path_str,
+            llm_config=llm_config,
+            assoc_config=assoc_config
+        )
+
+        # --- 阶段7 结束 ---
+        # 移除 task.status = PDFParsingTask.Status.COMPLETED
+        logger.info(f"任务 {task_db_id} 图片关联完成。传递到阶段8。")
+        return task_db_id  # <--- 必须返回 task_db_id 给阶段8
+
+    except Exception as e:
+        logger.error(f"任务 {task_db_id} (图片关联) 失败: {e}", exc_info=True)
+        task.status = PDFParsingTask.Status.FAILED
+        task.error_message = f"[图片关联失败] {e}"
+        task.save(update_fields=['status', 'error_message'])
+        raise
+
+
+# --- 阶段8：厂商标准化 ---
+@shared_task(bind=True)
+def run_manufacturer_standardization_task(self, task_db_id):
+    """
+    阶段8：厂商标准化。
+    (修改：不再是流水线的最后一站)
+    """
+    if task_db_id is None:
+        logger.info("厂商标准化阶段跳过，因为任务是重复的。")
+        return None
+
+    try:
+        task = PDFParsingTask.objects.get(id=task_db_id)
+        task.celery_task_id = self.request.id
+        task.status = PDFParsingTask.Status.MANUFACTURER_STANDARDIZATION
+        task.save(update_fields=['celery_task_id', 'status'])
+        logger.info(f"阶段8 (厂商标准化) 开始: {task_db_id}")
+    except PDFParsingTask.DoesNotExist:
+        logger.error(f"Manufacturer Standardization 任务 {task_db_id} 开始时未找到。")
+        return
+
+    try:
+        results_dir_abs_path_str = os.path.join(settings.MEDIA_ROOT, task.output_directory, "results")
+
+        # 检查阶段7的输出是否存在
+        resolved_dir = os.path.join(results_dir_abs_path_str, "param_results", "resolved_with_images")
+        if not os.path.exists(resolved_dir):
+            raise FileNotFoundError(f"阶段7的输出目录 'resolved_with_images' 物理丢失: {resolved_dir}")
+
+        # 准备配置
+        llm_config = {
+            "api_key": settings.DEFAULT_LLM_API_KEY,
+            "base_url": settings.DEFAULT_LLM_API_URL,
+            "model_name": settings.DEFAULT_LLM_MODEL_NAME
+        }
+        embedding_config = {
+            "api_key": settings.DEFAULT_EMBEDDING_API_KEY,
+            "base_url": settings.DEFAULT_EMBEDDING_API_URL,
+            "model_name": settings.DEFAULT_EMBEDDING_MODEL_NAME,
+            "dimensions": settings.DEFAULT_EMBEDDING_DIMENSIONS
+        }
+        standardization_config = settings.PDF_PARSER_MANUFACTURER_STANDARDIZATION
+
+        # 执行阶段8逻辑
+        process_manufacturer_standardization(
+            results_dir_path=results_dir_abs_path_str,
+            llm_config=llm_config,
+            embedding_config=embedding_config,
+            standardization_config=standardization_config
+        )
+
+        # --- 阶段8 结束 ---
+        # 移除 COMPLETED 状态设置
+        logger.info(f"任务 {task_db_id} 厂商标准化完成。传递到阶段9。")
+        return task_db_id  # <--- 必须返回 task_db_id 给阶段9
+
+    except Exception as e:
+        logger.error(f"任务 {task_db_id} (厂商标准化) 失败: {e}", exc_info=True)
+        task.status = PDFParsingTask.Status.FAILED
+        task.error_message = f"[厂商标准化失败] {e}"
+        task.save(update_fields=['status', 'error_message'])
+        raise
+
+
+# --- 阶段9：器件分类 ---
+@shared_task(bind=True)
+def run_classify_device_task(self, task_db_id):
+    """
+    阶段9：器件分类。
+    (修改：不再是流水线的最后一站)
+    """
+    if task_db_id is None:
+        logger.info("器件分类阶段跳过，因为任务是重复的。")
+        return None
+
+    try:
+        task = PDFParsingTask.objects.get(id=task_db_id)
+        task.celery_task_id = self.request.id
+        task.status = PDFParsingTask.Status.CLASSIFICATION
+        task.save(update_fields=['celery_task_id', 'status'])
+        logger.info(f"阶段9 (器件分类) 开始: {task_db_id}")
+    except PDFParsingTask.DoesNotExist:
+        logger.error(f"Classification 任务 {task_db_id} 开始时未找到。")
+        return
+
+    try:
+        results_dir_abs_path_str = os.path.join(settings.MEDIA_ROOT, task.output_directory, "results")
+
+        mfg_standardized_dir = os.path.join(results_dir_abs_path_str, "param_results", "manufacturer_standardized")
+        if not os.path.exists(mfg_standardized_dir):
+            raise FileNotFoundError(f"阶段8的输出目录 'manufacturer_standardized' 物理丢失: {mfg_standardized_dir}")
+
+        llm_config = {
+            "api_key": settings.DEFAULT_LLM_API_KEY,
+            "base_url": settings.DEFAULT_LLM_API_URL,
+            "model_name": settings.DEFAULT_LLM_MODEL_NAME
+        }
+        classification_config = settings.PDF_PARSER_CLASSIFICATION
+
+        process_device_classification(
+            results_dir_path=results_dir_abs_path_str,
+            llm_config=llm_config,
+            classification_config=classification_config
+        )
+
+        # --- 阶段9 结束 ---
+        # 移除 COMPLETED 状态设置
+        logger.info(f"任务 {task_db_id} 器件分类完成。传递到阶段10。")
+        return task_db_id  # <--- 必须返回 task_db_id 给阶段10
+
+    except Exception as e:
+        logger.error(f"任务 {task_db_id} (器件分类) 失败: {e}", exc_info=True)
+        task.status = PDFParsingTask.Status.FAILED
+        task.error_message = f"[器件分类失败] {e}"
+        task.save(update_fields=['status', 'error_message'])
+        raise
+
+
+# --- 阶段10：图谱构建 ---
+@shared_task(bind=True)
+def run_graph_construction_task(self, task_db_id):
+    """
+    阶段10：图谱构建。
+    这是流水线的最后一站。
+    """
+    if task_db_id is None:
+        logger.info("图谱构建阶段跳过，因为任务是重复的。")
+        return None
+
+    # --- (*** 关键修复 ***) ---
+    # 1. 在 try 块之前获取 task 对象
+    try:
+        task = PDFParsingTask.objects.get(id=task_db_id)
+    except PDFParsingTask.DoesNotExist:
+        logger.error(f"Graph Construction 任务 {task_db_id} 开始时未找到。")
+        return
+    # --- (修复结束) ---
+
+    try:
+        # 2. 现在可以安全地设置状态和路径
+        task.celery_task_id = self.request.id
+        task.status = PDFParsingTask.Status.GRAPH_CONSTRUCTION  # <--- 设置新状态
+        task.save(update_fields=['celery_task_id', 'status'])
+        logger.info(f"阶段10 (图谱构建) 开始: {task_db_id}")
+
+        results_dir_abs_path_str = os.path.join(settings.MEDIA_ROOT, task.output_directory, "results")
+
+        # 检查阶段9的输出是否存在
+        classified_dir = os.path.join(results_dir_abs_path_str, "param_results", "classified_results")
+        if not os.path.exists(classified_dir):
+            raise FileNotFoundError(f"阶段9的输出目录 'classified_results' 物理丢失: {classified_dir}")
+
+        # 准备配置
+        llm_config = {
+            "api_key": settings.DEFAULT_LLM_API_KEY,
+            "base_url": settings.DEFAULT_LLM_API_URL,
+            "model_name": settings.DEFAULT_LLM_MODEL_NAME
+        }
+        embedding_config = {
+            "api_key": settings.DEFAULT_EMBEDDING_API_KEY,
+            "base_url": settings.DEFAULT_EMBEDDING_API_URL,
+            "model_name": settings.DEFAULT_EMBEDDING_MODEL_NAME,
+            "dimensions": settings.DEFAULT_EMBEDDING_DIMENSIONS,
+            "BATCH_SIZE": settings.DEFAULT_EMBEDDING_BATCH_SIZE
+        }
+        construction_config = settings.PDF_PARSER_GRAPH_CONSTRUCTION
+
+        # 执行阶段10逻辑
+        process_graph_construction(
+            task_db_id=task_db_id,  # <--- 传递 task_id
+            results_dir_path=results_dir_abs_path_str,
+            llm_config=llm_config,
+            embedding_config=embedding_config,
+            construction_config=construction_config
+        )
+
+        # --- 阶段10 结束 ---
+        task.status = PDFParsingTask.Status.COMPLETED
+        task.save(update_fields=['status', 'updated_at'])
+
+        logger.info(f"任务 {task_db_id} 图谱构建完成。流水线结束。")
+        return f"Success (Graph Construction Complete)"
+
+    except Exception as e:
+        logger.error(f"任务 {task_db_id} (图谱构建) 失败: {e}", exc_info=True)
+        # 此时 'task' 变量必定存在
+        task.status = PDFParsingTask.Status.FAILED
+        task.error_message = f"[图谱构建失败] {e}"
         task.save(update_fields=['status', 'error_message'])
         raise

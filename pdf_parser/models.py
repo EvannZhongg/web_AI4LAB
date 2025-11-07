@@ -5,6 +5,8 @@ from django.contrib.auth.models import User
 from django.conf import settings
 from django.db.models.signals import post_delete  # <--- 添加
 from django.dispatch import receiver
+from pgvector.django import VectorField
+import uuid
 
 def pdf_upload_path(instance, filename):
     # MEDIA_ROOT/pdf_uploads/<user_id>/<filename>
@@ -17,14 +19,18 @@ def md_output_path(instance, filename):
 
 class PDFParsingTask(models.Model):
     class Status(models.TextChoices):
-        # --- 6 阶段流水线 ---
+        # --- 10 阶段流水线 ---
         PENDING = 'PENDING', '排队中'
         TEXT_ANALYSIS = 'TEXT_ANALYSIS', '阶段1: 文本解析'
         VLM_ANALYSIS = 'VLM_ANALYSIS', '阶段2: 图片分析'
         TEXT_CHUNKING = 'TEXT_CHUNKING', '阶段3: 文本分块'
         MODEL_EXTRACTION = 'MODEL_EXTRACTION', '阶段4: 型号抽取/融合'
         PARAM_EXTRACTION = 'PARAM_EXTRACTION', '阶段5: 参数提取'
-        PARAM_FUSION = 'PARAM_FUSION', '阶段6: 参数融合/细化'  # <--- 最终阶段
+        PARAM_FUSION = 'PARAM_FUSION', '阶段6: 参数融合/细化'
+        IMAGE_ASSOCIATION = 'IMAGE_ASSOCIATION', '阶段7: 图片关联'
+        MANUFACTURER_STANDARDIZATION = 'MANUFACTURER_STANDARDIZATION', '阶段8: 厂商标准化'
+        CLASSIFICATION = 'CLASSIFICATION', '阶段9: 器件分类'
+        GRAPH_CONSTRUCTION = 'GRAPH_CONSTRUCTION', '阶段10: 图谱构建' # <--- 新增
         COMPLETED = 'COMPLETED', '已完成'
         FAILED = 'FAILED', '失败'
 
@@ -103,3 +109,92 @@ def _delete_pdf_task_files(sender, instance, **kwargs):
             print(f"Deleted markdown file (fallback): {instance.markdown_file.name}")
          except Exception as e:
             print(f"Error deleting markdown file {instance.markdown_file.name}: {e}")
+
+
+# --- 新增：知识图谱模型 (阶段10) ---
+#
+
+class GraphChunk(models.Model):
+    """
+    存储来自 chunks.json 的原始文本块及其向量。
+    """
+    # 唯一标识符 (例如 "task_39_chunk_1")
+    unique_id = models.CharField(max_length=100, unique=True, primary_key=True)
+    task = models.ForeignKey(PDFParsingTask, on_delete=models.CASCADE, related_name="graph_chunks")
+    chunk_id_in_doc = models.CharField(max_length=50)  # chunks.json中的 "id" (例如 "1", "2")
+    text = models.TextField()
+    embedding = VectorField(dimensions=settings.DEFAULT_EMBEDDING_DIMENSIONS)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.unique_id
+
+    class Meta:
+        ordering = ['created_at']
+        indexes = [
+            models.Index(fields=['task', 'chunk_id_in_doc']),
+        ]
+
+
+class GraphNode(models.Model):
+    """
+    知识图谱中的一个节点（实体）。
+    使用 "readable_id" 作为主键，以实现增量更新 (Upsert)。
+    """
+    # 节点的可读唯一ID (例如 "Device:ON Semiconductor_UD1006FR")
+    node_id = models.CharField(max_length=1024, unique=True, primary_key=True)
+
+    community = models.CharField(max_length=100, db_index=True)  # 例如 "Device", "Manufacturer", "Package type"
+    name = models.CharField(max_length=512, db_index=True)  # 键名 (例如 "Name", "Package")
+    value = models.TextField(db_index=True)  # 值 (例如 "UD1006FR", "TO-220F-2FS")
+
+    # 存储额外信息，例如图片路径、描述等
+    properties = models.JSONField(default=dict, null=True, blank=True)
+
+    # 用于向量搜索的文本和向量
+    text_for_embedding = models.TextField()
+    embedding = VectorField(dimensions=settings.DEFAULT_EMBEDDING_DIMENSIONS)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.node_id
+
+
+class GraphEdge(models.Model):
+    """
+    知识图谱中的一条边（关系）。
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    source_node = models.ForeignKey(GraphNode, on_delete=models.CASCADE, related_name="source_of_edges")
+    target_node = models.ForeignKey(GraphNode, on_delete=models.CASCADE, related_name="target_of_edges")
+    type = models.CharField(max_length=100, db_index=True)  # 关系类型 (例如 "is produced by")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.source_node_id} -> {self.type} -> {self.target_node_id}"
+
+    class Meta:
+        # 确保边是唯一的
+        unique_together = ('source_node', 'target_node', 'type')
+        ordering = ['created_at']
+
+
+class NodeSourceLink(models.Model):
+    """
+    连接节点和其来源的PDF任务及具体Chunks。
+    这是实现“删除”功能的关键。
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    node = models.ForeignKey(GraphNode, on_delete=models.CASCADE, related_name="source_links")
+    task = models.ForeignKey(PDFParsingTask, on_delete=models.CASCADE, related_name="created_nodes")
+    # 一个节点实例（例如 "Package: TO-220F-2FS" from PDF 39）
+    # 可能来源于多个chunks (例如 ["1", "5"])
+    source_chunks = models.ManyToManyField(GraphChunk, blank=True)
+
+    def __str__(self):
+        return f"Node {self.node_id} linked to Task {self.task_id}"
+
+    class Meta:
+        unique_together = ('node', 'task')  # 一个节点在一个任务中只应出现一次
