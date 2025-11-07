@@ -30,7 +30,7 @@ SECRET_KEY = "django-insecure-6%v%_8@88(8@1xw95_omex_=!vw99l)rp7jrw!bi79k23yc9iu
 DEBUG = True
 
 ALLOWED_HOSTS = [
-    '70418b8712f4.ngrok-free.app', # 你的 ngrok 域名
+    '91970ab25532.ngrok-free.app', # 你的 ngrok 域名
     'localhost',
     '127.0.0.1',
 ]
@@ -50,6 +50,8 @@ INSTALLED_APPS = [
     'corsheaders',
     'api',
     'pdf_parser',
+    'pgvector',
+    'rag_retriever',
 ]
 
 MIDDLEWARE = [
@@ -140,7 +142,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # CORS (跨域资源共享) 配置
 CORS_ALLOWED_ORIGINS = [
-    "https://70418b8712f4.ngrok-free.app",
+    "https://91970ab25532.ngrok-free.app",
     "http://localhost:5173",
     "http://localhost:5174",
     "https://web-demo-dcr.pages.dev", # 你的Cloudflare前端域名
@@ -148,7 +150,7 @@ CORS_ALLOWED_ORIGINS = [
 
 # CSRF 受信来源
 CSRF_TRUSTED_ORIGINS = [
-    "https://70418b8712f4.ngrok-free.app",
+    "https://91970ab25532.ngrok-free.app",
     "https://web-demo-dcr.pages.dev/", # 你的Cloudflare前端域名
 ]
 
@@ -181,6 +183,12 @@ DEFAULT_LLM_MODEL_NAME = "deepseek-chat"
 DEFAULT_VLM_API_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 DEFAULT_VLM_API_KEY = "sk-25073b1d5af2464292d41bfb04d92a7e" 
 DEFAULT_VLM_MODEL_NAME = "qwen2.5-vl-72b-instruct"
+
+DEFAULT_EMBEDDING_API_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1" # (示例，请修改为您的Embedding模型URL)
+DEFAULT_EMBEDDING_API_KEY = "sk-25073b1d5af2464292d41bfb04d92a7e" # (示例，请修改为您的API Key)
+DEFAULT_EMBEDDING_MODEL_NAME = "text-embedding-v4" # (示例，请修改)
+DEFAULT_EMBEDDING_DIMENSIONS = 1024 # (示例，请根据您的模型修改)
+DEFAULT_EMBEDDING_BATCH_SIZE = 10
 
 # SIMPLE_JWT 配置
 SIMPLE_JWT = {
@@ -238,21 +246,30 @@ CELERY_TASK_QUEUES = (
     Queue('stage1_text', routing_key='stage1.text'),
     Queue('stage2_vlm', routing_key='stage2.vlm'),
     Queue('stage3_chunking', routing_key='stage3.chunking'),
-    Queue('stage4_extraction', routing_key='stage4.extraction'), # (抽取+融合)
+    Queue('stage4_extraction', routing_key='stage4.extraction'),
     Queue('stage5_param_extraction', routing_key='stage5.param_extraction'),
-    Queue('stage6_param_fusion', routing_key='stage6.param_fusion'), # (聚合+细化)
+    Queue('stage6_param_fusion', routing_key='stage6.param_fusion'),
+    Queue('stage7_image_association', routing_key='stage7.image'),
+    Queue('stage8_mfg_standardization', routing_key='stage8.mfg'),
+    Queue('stage9_classify', routing_key='stage9.classify'),
+    Queue('stage10_graph_construction', routing_key='stage10.graph'),
 )
 
-# --- 任务路由 (6 阶段) ---
+# --- 任务路由 (9 阶段) ---
 CELERY_TASK_ROUTES = {
     'pdf_parser.tasks.task_pipeline': {'queue': 'celery'},
     'pdf_parser.tasks.run_text_analysis_task': {'queue': 'stage1_text'},
     'pdf_parser.tasks.run_vlm_analysis_task': {'queue': 'stage2_vlm'},
     'pdf_parser.tasks.run_chunking_task': {'queue': 'stage3_chunking'},
-    'pdf_parser.tasks.run_model_extraction_task': {'queue': 'stage4_extraction'}, # 阶段4
-    'pdf_parser.tasks.run_param_extraction_task': {'queue': 'stage5_param_extraction'}, # 阶段5
-    'pdf_parser.tasks.run_param_fusion_task': {'queue': 'stage6_param_fusion'}, # 阶段6
+    'pdf_parser.tasks.run_model_extraction_task': {'queue': 'stage4_extraction'},
+    'pdf_parser.tasks.run_param_extraction_task': {'queue': 'stage5_param_extraction'},
+    'pdf_parser.tasks.run_param_fusion_task': {'queue': 'stage6_param_fusion'},
+    'pdf_parser.tasks.run_image_association_task': {'queue': 'stage7_image_association'},
+    'pdf_parser.tasks.run_manufacturer_standardization_task': {'queue': 'stage8_mfg_standardization'},
+    'pdf_parser.tasks.run_classify_device_task': {'queue': 'stage9_classify'},
+    'pdf_parser.tasks.run_graph_construction_task': {'queue': 'stage10_graph_construction'}, # <--- 新增
 }
+
 # --- PDF 解析器 (pdf_parser) 配置 ---
 # 是否启用 OCR (True/False)
 PDF_PARSER_ENABLE_OCR = False
@@ -299,7 +316,7 @@ PDF_PARSER_PARAM_EXTRACTION = {
     "MAX_TOKENS": 8000
 }
 
-# --- 阶段7：参数融合 (Param Fusion) 配置 ---
+# --- 阶段6：参数融合 (Param Fusion) 配置 ---
 PDF_PARSER_PARAM_FUSION = {
     # LLM API 调用超时（秒）
     "API_TIMEOUT_SECONDS": 60,
@@ -307,4 +324,50 @@ PDF_PARSER_PARAM_FUSION = {
     "MAX_API_RETRIES": 3,
     # 重试前的等待时间（秒）
     "RETRY_DELAY_SECONDS": 5,
+}
+
+# --- 阶段7：图片关联 (Image Association) 配置 ---
+PDF_PARSER_IMAGE_ASSOCIATION = {
+    "MAX_RETRIES": 3,
+    "RETRY_DELAY_SECONDS": 5,
+}
+
+# --- 阶段8：厂商标准化 (Manufacturer Standardization) 配置 ---
+PDF_PARSER_MANUFACTURER_STANDARDIZATION = {
+    "MAX_LLM_RETRIES": 3,
+    "RETRY_DELAY_SECONDS": 5,
+}
+
+# --- 新增：阶段9：器件分类 (Device Classification) 配置 ---
+PDF_PARSER_CLASSIFICATION = {
+    # LLM决策重试次数
+    "MAX_LLM_RETRIES": 3,
+    # 重试延迟
+    "RETRY_DELAY_SECONDS": 5,
+}
+
+# --- 新增：阶段10：图谱构建 (Graph Construction) 配置 ---
+PDF_PARSER_GRAPH_CONSTRUCTION = {
+    "BATCH_SIZE": 500, # 数据库批量插入大小
+    "MAX_LLM_RETRIES": 3,
+    "RETRY_DELAY_SECONDS": 5,
+    # (Embedding Batch Size 将从 DEFAULT_EMBEDDING 配置中读取)
+}
+
+# --- 新增：阶段RAG：检索增强生成 (RAG) 配置 ---
+PDF_PARSER_RAG = {
+    # 1. 检索参数 (来自您的 retriever.py)
+    'TOP_P_PER_ENTITY': 3,       # (top_p_per_entity) 匹配种子实体的最接近节点
+    'BFS_DEPTH': 4,              # (bfs_depth) 图谱搜索的最大跳数
+    'TOP_K_ORPHANS_TO_BRIDGE': 3, # (top_k_orphans_to_bridge) 尝试桥接的孤儿节点数
+
+    # 2. 评分权重 (来自您的 retriever.py, 移除了 user 要求的 degree)
+    'CHUNK_SCORE_ALPHA': 0.6,       # 文本相似度 (sim) vs 图谱推荐度 (rec) 的权重
+    'SEED_DENSITY_BONUS': 0.5,      # 路径中种子节点密度的奖励
+    'TOP_REC_K_FOR_SIMILARITY': 5,  # 为图谱推荐的Chunk计算相似度的Top K
+    'STRONG_CHUNK_RECOMMENDATION_BONUS': 0.25, # 图谱对已在文本结果中的chunk的奖励
+    'WEAK_CHUNK_RECOMMENDATION_BONUS': 0.15,   # 图谱对未在文本结果中的chunk的奖励
+    'TEXT_CONFIRMATION_BONUS': 0.5, # 文本搜索结果确认了图谱路径中实体的奖励
+    'ENDORSEMENT_BASE_BONUS': 0.1,  # 桥接路径对主路径的基础奖励
+    'ENDORSEMENT_DECAY_FACTOR': 0.85, # 桥接路径每长一跳的奖励衰减
 }

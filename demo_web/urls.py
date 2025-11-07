@@ -7,6 +7,7 @@ urlpatterns = [
     path("admin/", admin.site.urls),
     path('api/', include('api.urls')),
     path('api/pdf_parser/', include('pdf_parser.urls')),
+    path('api/rag/', include('rag_retriever.urls')),
 ]
 
 # 仅在 DEBUG 模式下生效

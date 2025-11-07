@@ -13,11 +13,16 @@ def experiment_csv_path(instance, filename):
     exp_id = instance.experiment.id if instance.experiment else 'misc'
     return f'experiment_csvs/{exp_id}/{filename}'
 
+
 class Device(models.Model):
-    # ... (保持不变) ...
+    # ... (name 字段不变) ...
     name = models.CharField(max_length=100, verbose_name="器件名称")
-    device_type = models.CharField(max_length=50, verbose_name="器件类型", db_index=True)
-    substrate = models.CharField(max_length=50, verbose_name="衬底材料")
+
+    # (*** 关键修复：允许手动创建时为空 ***)
+    device_type = models.CharField(max_length=50, verbose_name="器件类型", db_index=True, blank=True, null=True)
+    substrate = models.CharField(max_length=50, verbose_name="衬底材料", blank=True, null=True)
+    # (*** 修复结束 ***)
+
     device_number = models.CharField(max_length=100, unique=True, verbose_name="器件编号")
     tech_description = models.TextField(blank=True, null=True, verbose_name="技术说明")
     photo_data = models.TextField(blank=True, null=True, verbose_name="微观照片 (Base64)")
@@ -30,7 +35,6 @@ class Device(models.Model):
         verbose_name = "器件"
         verbose_name_plural = verbose_name
         ordering = ['-created_at']
-
 
 class Experiment(models.Model):
     # ... (保持不变) ...
