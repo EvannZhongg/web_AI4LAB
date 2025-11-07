@@ -2,17 +2,16 @@ import axios from 'axios';
 import { useAuthStore } from '@/stores/auth';
 import { ElMessage } from 'element-plus';
 
-// baseURL 保持不变，它会根据您的 .env 文件自动切换
-// 如果后端部署在 ngrok 或其他地方，请确保这里是正确的 API 基础 URL
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api/'; // 确保末尾有斜杠 '/'
+// (*** 关键修复：将回退值也改为相对路径 ***)
+// 这确保了在 .env 文件加载失败时，它仍然会尝试使用 Vite 代理
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/';
 
 // 1. 创建并配置一个 Axios 实例
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 10000, // 请求超时时间
+  timeout: 10000,
   headers: {
     'Content-Type': 'application/json',
-    // 如果您仍然通过 ngrok 访问，保留此行
     'ngrok-skip-browser-warning': 'true'
   },
 });

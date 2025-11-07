@@ -9,6 +9,7 @@ import DeviceAnalysisView from '../views/DeviceAnalysisView.vue'
 import DeviceComparisonView from '../views/DeviceComparisonView.vue'
 import SettingsView from '../views/SettingsView.vue'
 import DeviceParsingView from '../views/DeviceParsingView.vue'
+import RagView from '../views/RagView.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -66,6 +67,11 @@ const router = createRouter({
       path: '/device-parsing',
       name: 'device-parsing',
       component: DeviceParsingView
+    },
+    {
+      path: '/rag',
+      name: 'rag',
+      component: RagView
     }
   ]
 })

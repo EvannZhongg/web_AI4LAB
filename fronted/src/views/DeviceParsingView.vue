@@ -104,9 +104,13 @@ const getStatusType = (status) => {
     case 'TEXT_ANALYSIS': return 'primary'; // 1
     case 'VLM_ANALYSIS': return 'warning';  // 2
     case 'TEXT_CHUNKING': return 'primary'; // 3
-    case 'MODEL_EXTRACTION': return 'warning'; // 4 (抽取+融合)
-    case 'PARAM_EXTRACTION': return 'primary'; // 5 (参数提取)
-    case 'PARAM_FUSION': return 'warning'; // 6 (融合+细化)
+    case 'MODEL_EXTRACTION': return 'warning'; // 4
+    case 'PARAM_EXTRACTION': return 'primary'; // 5
+    case 'PARAM_FUSION': return 'warning'; // 6
+    case 'IMAGE_ASSOCIATION': return 'primary'; // 7
+    case 'MANUFACTURER_STANDARDIZATION': return 'warning'; // 8
+    case 'CLASSIFICATION': return 'primary'; // 9
+    case 'GRAPH_CONSTRUCTION': return 'warning'; // 10 (新增)
     case 'PENDING': return 'info';
     default: return 'info';
   }
@@ -121,7 +125,11 @@ const getStatusText = (status) => {
     case 'TEXT_CHUNKING': return '阶段3: 文本分块中...';
     case 'MODEL_EXTRACTION': return '阶段4: 型号抽取/融合中...';
     case 'PARAM_EXTRACTION': return '阶段5: 参数提取中...';
-    case 'PARAM_FUSION': return '阶段6: 参数融合/细化中...'; // <--- 修正
+    case 'PARAM_FUSION': return '阶段6: 参数融合/细化中...';
+    case 'IMAGE_ASSOCIATION': return '阶段7: 图片关联中...';
+    case 'MANUFACTURER_STANDARDIZATION': return '阶段8: 厂商标准化...';
+    case 'CLASSIFICATION': return '阶段9: 器件分类中...'; // <--- 新增
+    case 'GRAPH_CONSTRUCTION': return '阶段10: 构建知识图谱...';
     case 'PENDING': return '排队中...';
     default: return '未知';
   }

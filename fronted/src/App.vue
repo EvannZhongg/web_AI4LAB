@@ -27,6 +27,7 @@ const goToSettings = () => {
           <RouterLink to="/device-analysis">器件分析</RouterLink>
           <RouterLink to="/device-comparison">器件对比</RouterLink>
           <RouterLink to="/device-parsing">器件解析</RouterLink>
+          <RouterLink to="/rag">RAG检索</RouterLink>
           <RouterLink to="/assessment">评估模块</RouterLink>
           <RouterLink to="/failure-probability">失效概率模块</RouterLink>
         </div>
