@@ -13,8 +13,8 @@ from django.db.models import Q
 from pgvector.django import L2Distance
 import pandas as pd
 from typing import List, Dict, Any, Tuple, Set
-from django.conf import settings # <--- 新增
-import os # <--- 新增
+from django.conf import settings  # <--- 新增
+import os  # <--- 新增
 
 # 导入 pdf_parser 的模型
 from pdf_parser.models import GraphNode, GraphEdge, GraphChunk, NodeSourceLink, PDFParsingTask
@@ -56,7 +56,7 @@ class PgVectorRetriever:
         # 3. 加载 RAG 算法参数
         self.TOP_P_PER_ENTITY = rag_conf['TOP_P_PER_ENTITY']
         self.BFS_DEPTH = rag_conf['BFS_DEPTH']
-        self.TOP_K_ORPHANS_TO_BRIDGE = rag_conf['TOP_K_ORPHANS_TO_BRIDGE']
+        # self.TOP_K_ORPHANS_TO_BRIDGE = rag_conf['TOP_K_ORPHANS_TO_BRIDGE'] # <--- MODIFIED: 移除
 
         # 4. 加载评分权重
         self.CHUNK_SCORE_ALPHA = rag_conf['CHUNK_SCORE_ALPHA']
@@ -65,8 +65,8 @@ class PgVectorRetriever:
         self.STRONG_CHUNK_RECOMMENDATION_BONUS = rag_conf['STRONG_CHUNK_RECOMMENDATION_BONUS']
         self.WEAK_CHUNK_RECOMMENDATION_BONUS = rag_conf['WEAK_CHUNK_RECOMMENDATION_BONUS']
         self.TEXT_CONFIRMATION_BONUS = rag_conf['TEXT_CONFIRMATION_BONUS']
-        self.ENDORSEMENT_BASE_BONUS = rag_conf['ENDORSEMENT_BASE_BONUS']
-        self.ENDORSEMENT_DECAY_FACTOR = rag_conf['ENDORSEMENT_DECAY_FACTOR']
+        # self.ENDORSEMENT_BASE_BONUS = rag_conf['ENDORSEMENT_BASE_BONUS'] # <--- MODIFIED: 移除
+        # self.ENDORSEMENT_DECAY_FACTOR = rag_conf['ENDORSEMENT_DECAY_FACTOR'] # <--- MODIFIED: 移除
 
         # 5. 构建内存图（为BFS做准备）
         self.adj_list, self.edge_map = self._build_adjacency_list()
@@ -88,7 +88,7 @@ class PgVectorRetriever:
         # (node.name 对应 'Forward Voltage', node.value 对应 '1.3 V')
         else:
             return f"{node.name}: {node.value}"
-        
+
     def _get_embedding(self, text: str) -> np.ndarray:
         """获取单个嵌入向量并返回 np.ndarray"""
         emb_map = get_embeddings_batch(
@@ -288,24 +288,10 @@ class PgVectorRetriever:
 
         return final_scored_paths
 
-    def _find_shortest_bridge_path(self, start_node: str, target_nodes: set) -> tuple[list | None, str | None]:
-        """查找最短桥接路径 (来自您的代码)"""
-        if start_node in target_nodes:
-            return [start_node], start_node
-        queue = deque([[start_node]])
-        visited = {start_node}
-        while queue:
-            path = queue.popleft()
-            node = path[-1]
-            if node in target_nodes:
-                return path, node
-            for neighbor in self.adj_list.get(node, set()):
-                if neighbor not in visited:
-                    visited.add(neighbor)
-                    new_path = list(path)
-                    new_path.append(neighbor)
-                    queue.append(new_path)
-        return None, None
+    # def _find_shortest_bridge_path(self, start_node: str, target_nodes: set) -> tuple[list | None, str | None]:
+    #     """查找最短桥接路径 (来自您的代码)"""
+    #     # <--- MODIFIED: 移除
+    #     pass
 
     def _get_text_chunks(self, query_embedding: list, top_k: int) -> Set[str]:
         """使用 pgvector 检索 Top-K 文本块"""
@@ -447,45 +433,14 @@ class PgVectorRetriever:
                 p_info['reason'] += f" + TextConfirm({overlap})"
         logger.info(f"  - Applied text confirmation bonus to paths.")
 
-        orphan_entities = entities_from_chunks - entities_from_paths
-        endorsing_bridges_map = defaultdict(list)
-        bridged_path_objects = []
+        # --- (*** MODIFIED: 移除孤儿实体桥接逻辑 ***) ---
+        # orphan_entities = entities_from_chunks - entities_from_paths
+        # endorsing_bridges_map = defaultdict(list) # 移除
+        # bridged_path_objects = [] # 移除
 
-        if orphan_entities and entities_from_paths:
-            logger.info(
-                f"  - Found {len(orphan_entities)} orphan entities. Selecting top {self.TOP_K_ORPHANS_TO_BRIDGE} to endorse...")
-
-            orphans_to_process = list(orphan_entities)[:self.TOP_K_ORPHANS_TO_BRIDGE]
-
-            node_to_initial_path_map = defaultdict(list)
-            for p_info in scored_paths:
-                for node in p_info['path']:
-                    node_to_initial_path_map[node].append(p_info)
-
-            all_found_bridge_paths = []
-            for rank, orphan_id in enumerate(orphans_to_process, 1):
-                bridge_path, target_node = self._find_shortest_bridge_path(orphan_id, entities_from_paths)
-
-                if bridge_path and target_node and len(bridge_path) > 1:
-                    all_found_bridge_paths.append(bridge_path)
-                    bridge_len = len(bridge_path) - 1
-                    bonus_score = self.ENDORSEMENT_BASE_BONUS * (1.0 / rank) * (
-                                self.ENDORSEMENT_DECAY_FACTOR ** bridge_len)
-                    logger.info(
-                        f"    - Bridged orphan '{orphan_id[:20]}...' (rank {rank}) via {bridge_len}-hop path. Applying bonus: {bonus_score:.3f}")
-
-                    for target_path_info in node_to_initial_path_map[target_node]:
-                        target_path_info['score'] *= (1 + bonus_score)
-                        target_path_info['reason'] += f" + Endorsed"
-                        canonical_key = self._get_canonical_path_key(target_path_info['path'])
-                        endorsing_bridges_map[canonical_key].append(bridge_path)
-
-            if all_found_bridge_paths:
-                scored_bridged_paths = self._score_paths_component_based(all_found_bridge_paths, query_embedding_np,
-                                                                         seed_entity_ids)
-                for p_info in scored_bridged_paths:
-                    p_info['reason'] = 'Bridged Path'
-                bridged_path_objects = scored_bridged_paths
+        # if orphan_entities and entities_from_paths:
+        # ... (移除整个 if 块)
+        # --- (*** 修改结束 ***) ---
 
         chunk_recs_query = NodeSourceLink.objects.filter(
             node_id__in=entities_from_paths
@@ -500,7 +455,7 @@ class PgVectorRetriever:
         logger.info(f"  - Scored a total of {len(all_candidate_ids)} candidate chunks.")
 
         merged_paths = {}
-        paths_for_merging = scored_paths + bridged_path_objects
+        paths_for_merging = scored_paths  # <--- MODIFIED: 移除 + bridged_path_objects
         for p_info in paths_for_merging:
             canonical_key = self._get_canonical_path_key(p_info['path'])
             if canonical_key not in merged_paths:
@@ -518,9 +473,11 @@ class PgVectorRetriever:
 
         final_ranked_paths = sorted(all_scored_paths, key=lambda x: x['score'], reverse=True)[:top_k_paths]
 
-        for p_info in final_ranked_paths:
-            canonical_key = self._get_canonical_path_key(p_info['path'])
-            p_info['endorsing_bridges'] = endorsing_bridges_map.get(canonical_key, [])
+        # --- (*** MODIFIED: 移除桥接信息添加 ***) ---
+        # for p_info in final_ranked_paths:
+        #     canonical_key = self._get_canonical_path_key(p_info['path'])
+        #     p_info['endorsing_bridges'] = endorsing_bridges_map.get(canonical_key, [])
+        # --- (*** 修改结束 ***) ---
 
         final_ranked_chunks = sorted(final_chunk_scores_list, key=lambda x: x['final_score'], reverse=True)[
                               :top_k_chunks]
@@ -699,18 +656,10 @@ class PgVectorRetriever:
             }
         }
 
-        if path_info.get('endorsing_bridges'):
-            details['endorsing_bridges'] = []
-            all_bridge_nodes = {eid for bridge in path_info['endorsing_bridges'] for eid in bridge}
-            bridge_nodes_map = GraphNode.objects.filter(node_id__in=all_bridge_nodes).in_bulk()
-
-            for bridge in path_info['endorsing_bridges']:
-                bridge_readable_parts = []
-                for eid in bridge:
-                    bridge_node = bridge_nodes_map.get(eid)
-                    bridge_readable_parts.append(self._get_formatted_node_name(bridge_node))
-
-                details['endorsing_bridges'].append(" -> ".join(bridge_readable_parts))
+        # --- (*** MODIFIED: 移除桥接信息添加 ***) ---
+        # if path_info.get('endorsing_bridges'):
+        # ... (移除整个 if 块)
+        # --- (*** 修改结束 ***) ---
 
         return details
 
@@ -741,10 +690,10 @@ class PgVectorRetriever:
                             context_parts.append(f"  - 实体: {target_name} (描述: {desc})")
                             described_entities_in_path.add(target_name)
 
-                    if p.get('endorsing_bridges'):
-                        context_parts.append("  - 该路径被以下补全证据所支持:")
-                        for bridge_readable in p['endorsing_bridges']:
-                            context_parts.append(f"    - 补全路径: {bridge_readable}")
+                    # --- (*** MODIFIED: 移除桥接信息添加 ***) ---
+                    # if p.get('endorsing_bridges'):
+                    # ... (移除整个 if 块)
+                    # --- (*** 修改结束 ***) ---
                 paths_context = "\n".join(context_parts)
 
         if mode in ["full_context", "chunks_only"]:
