@@ -1,9 +1,10 @@
 <script setup>
-import { ref, reactive, nextTick, computed } from 'vue';
+import { ref, reactive, nextTick, computed, onUpdated } from 'vue'; // <--- (1) 导入 onUpdated
 import { useAuthStore } from '@/stores/auth';
 import { ElMessage } from 'element-plus';
 import GraphVisualizer from '@/components/GraphVisualizer.vue';
 import MarkdownIt from 'markdown-it';
+import { getRawMediaBlob } from '@/services/apiService'; // <--- (2) 导入新函数
 
 const authStore = useAuthStore();
 const query = ref('');
@@ -20,7 +21,7 @@ const chatScrollbar = ref(null);
 const contextScrollbar = ref(null);
 const pathViewMode = ref('text');
 
-const currentTaskBasePath = ref(''); // 例如: 'md_results/51'
+const currentTaskBasePath = ref('');
 const md = new MarkdownIt();
 
 // 存储默认的图像渲染规则
@@ -28,72 +29,56 @@ const defaultImageRenderer = md.renderer.rules.image || function(tokens, idx, op
   return self.renderToken(tokens, idx, options);
 };
 
-// --- (*** 关键修复：重写图像渲染规则 ***) ---
+// --- (*** 关键修改：重写图像渲染规则 ***) ---
+// (此逻辑现在是正确的，它会将所有路径转换为完整的 ngrok/media URL)
 md.renderer.rules.image = (tokens, idx, options, env, self) => {
   const token = tokens[idx];
   let src = token.attrGet('src');
 
-  // 1. 跳过绝对 URL (http, data) 或空的 src
   if (!src || src.startsWith('http') || src.startsWith('data:')) {
     return defaultImageRenderer(tokens, idx, options, env, self);
   }
 
-  // Django 的 MEDIA_URL (从 .env 读取, 确保末尾有 /)
+  // (*** 关键：VITE_MEDIA_URL 必须是完整的公网 URL ***)
+  // e.g., https://<ngrok-id>.ngrok-free.app/media/
   const VITE_MEDIA_URL = (import.meta.env.VITE_MEDIA_URL || '/media/').replace(/\/+$/, '') + '/';
+
+  // (在本地开发时, VITE_MEDIA_URL 是 /media/, 由 vite.config.js 代理)
+  // (在公网时, VITE_MEDIA_URL 是 https://.../media/)
+
   let newSrc = '';
+  let cleanSrc = src.replace(/^\.\//, '').replace(/\\/g, '/');
 
-  // 1. 规范化 src (来自 LLM)
-  let cleanSrc = src.replace(/^\.\//, '').replace(/\\/g, '/'); // 替换反斜杠
-
-  // --- (*** 逻辑重排 ***) ---
-
-  // 2. 检查是否是绝对本地文件路径 (e.g., D:/... or file:///...)
-  // 必须在检查 !cleanSrc.startsWith('/') 之前
-  if (cleanSrc.startsWith('file://') || cleanSrc.match(/^[a-zA-Z]:\//)) {
+  if (cleanSrc.startsWith('file://') || cleanSrc.match(/^[a-zA-Z]:/)) {
       const mediaMarker = '/media/';
-      // 路径可能被 URI 编码 (例如 %5C 替换 \)
       const decodedSrc = decodeURIComponent(cleanSrc);
       const normalizedPath = decodedSrc.replace(/\\/g, '/');
-
       const mediaIndex = normalizedPath.toLowerCase().indexOf(mediaMarker.toLowerCase());
 
       if (mediaIndex !== -1) {
-          // 截取 "media/" 之后的所有内容
           const relativePath = normalizedPath.substring(mediaIndex + mediaMarker.length);
-          newSrc = `${VITE_MEDIA_URL}${relativePath}`; // e.g., /media/md_results/60/...
+          newSrc = `${VITE_MEDIA_URL}${relativePath}`;
       } else {
-          // 无法智能转换，阻止它
-          console.warn(`Blocking local file path (could not find 'media/'): ${cleanSrc}`);
+          console.warn(`Blocking local file path: ${cleanSrc}`);
           return `[图像本地路径被阻止: ${token.content}]`;
       }
   }
-
-  // 3. 检查是否是服务器相对路径 (由 get_path_details 正确生成)
-  //    (例如: md_results/60/image/...)
   else if (cleanSrc.startsWith('md_results/')) {
     newSrc = `${VITE_MEDIA_URL}${cleanSrc}`;
   }
-
-  // 4. 检查是否是 chunk 相对路径 (由 LLM 从 chunk 文本中提取)
-  //    (例如: image/page_25.png)
   else if (!cleanSrc.startsWith('/')) {
     const basePath = (currentTaskBasePath.value || '').replace(/\\/g, '/').replace(/\/+$/, '');
-
     if (basePath) {
-        // 最终路径: /media/ + md_results/54 + / + image/page_25.png
         newSrc = `${VITE_MEDIA_URL}${basePath}/${cleanSrc}`;
     } else {
-        // Fallback: 无法确定 base path，可能无法加载
-        console.warn(`currentTaskBasePath is not set. Image src "${cleanSrc}" may not load correctly.`);
-        newSrc = cleanSrc; // 保持原样 (e.g., 'image/page_8...')
+        console.warn(`currentTaskBasePath not set. Image src "${cleanSrc}" may not load correctly.`);
+        // 尝试回退
+        newSrc = `${VITE_MEDIA_URL}${cleanSrc}`;
     }
   }
-
-  // 5. 回退 (例如 /static/...)
   else {
     newSrc = cleanSrc;
   }
-  // --- (*** 逻辑重排结束 ***) ---
 
   token.attrSet('src', newSrc);
   console.log(`Rewriting image src from '${src}' to '${newSrc}'`);
@@ -110,7 +95,6 @@ const renderMarkdown = (msg, index) => {
         content += '▍';
     }
   }
-  // 确保在渲染时，currentTaskBasePath.value 是最新的
   return md.render(content);
 };
 
@@ -175,7 +159,7 @@ const handleSubmitQuery = async () => {
   query.value = '';
 
   Object.assign(retrievalContext, { top_chunks: [], top_paths: [], diagnostics: {} });
-  currentTaskBasePath.value = ''; // <--- 重置 base path
+  currentTaskBasePath.value = '';
   const botMessage = reactive({ role: 'bot', content: '' });
   messages.value.push(botMessage);
   scrollToBottom(chatScrollbar);
@@ -293,6 +277,50 @@ const handleSubmitQuery = async () => {
     abortController = null;
   }
 };
+
+// --- (*** 新增：DOM 更新后处理图像 ***) ---
+const processImagesInChat = async () => {
+  if (!chatScrollbar.value || !chatScrollbar.value.$el) return;
+
+  // 查找所有尚未处理的、src 指向公网（ngrok 或 VITE_MEDIA_URL）的图片
+  const images = chatScrollbar.value.$el.querySelectorAll(
+    '.bot-message-html img[src^="http"]:not([data-processed="true"])'
+  );
+
+  if (images.length === 0) return;
+
+  console.log(`Found ${images.length} new images to process...`);
+
+  for (const img of images) {
+    const originalSrc = img.src;
+    img.setAttribute('data-processed', 'true'); // 标记为处理中
+
+    try {
+      // (*** 使用 apiService 中的新函数获取 blob ***)
+      const blob = await getRawMediaBlob(originalSrc);
+
+      if (blob) {
+        // 创建一个临时的、浏览器内存中的 URL
+        const objectURL = URL.createObjectURL(blob);
+        img.src = objectURL; // 替换 src
+        console.log(`Successfully replaced ${originalSrc} with Blob URL`);
+      } else {
+        console.warn(`Failed to fetch blob for ${originalSrc}`);
+      }
+    } catch (error) {
+      console.error(`Error processing image ${originalSrc}:`, error);
+    }
+  }
+};
+
+// (*** 新增：Vue 钩子，在 DOM 更新后触发图像处理 ***)
+onUpdated(() => {
+  // 当 'messages' 数组更新 (LLM 流式输出) 导致 DOM 变化时，
+  // 检查并处理新渲染的 <img> 标签。
+  if (messages.value.length > 0) {
+    processImagesInChat();
+  }
+});
 </script>
 
 <template>
@@ -408,6 +436,7 @@ const handleSubmitQuery = async () => {
 </template>
 
 <style scoped>
+/* (*** 样式与您上一版完全相同 ***) */
 .rag-page {
   display: flex;
   flex-direction: column;
@@ -420,8 +449,6 @@ const handleSubmitQuery = async () => {
   display: flex;
   min-height: 0;
 }
-
-/* (*** 关键修复：修改 Flex 比例 ***) */
 .context-area {
   flex: 0.8; /* 左侧面板 (33.3%) */
   border-right: 1px solid #dcdfe6;
@@ -436,8 +463,6 @@ const handleSubmitQuery = async () => {
   height: 100%;
   min-height: 0;
 }
-/* (*** 修复结束 ***) */
-
 .chat-scrollbar, .context-scrollbar {
   flex-grow: 1;
 }
@@ -460,8 +485,6 @@ const handleSubmitQuery = async () => {
   max-width: 90%;
   box-sizing: border-box;
 }
-
-/* 用户 (靠右) */
 .message-bubble-wrapper.user-wrapper {
   justify-content: flex-end;
 }
@@ -469,8 +492,6 @@ const handleSubmitQuery = async () => {
   background-color: #ecf5ff;
   border-bottom-right-radius: 0;
 }
-
-/* 机器人 (靠左) */
 .message-bubble-wrapper.bot-wrapper {
   justify-content: flex-start;
 }
@@ -478,14 +499,12 @@ const handleSubmitQuery = async () => {
   background-color: #f0f9eb;
   border-bottom-left-radius: 0;
 }
-
 .input-area {
   padding: 15px 20px;
   border-top: 1px solid #dcdfe6;
   background: #ffffff;
   flex-shrink: 0;
 }
-
 .message-content {
   word-wrap: break-word;
   font-family: inherit;

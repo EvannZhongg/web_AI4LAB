@@ -110,18 +110,22 @@ export default {
         // 'data' 应为 { csv_files_metadata: [...] }
         return apiClient.patch(`experiments/${id}/csv_metadata/`, data);
     },
-    // --- !!! 新增：上传 CSV 文件 !!! ---
+// --- !!! 新增：上传 CSV 文件 !!! ---
     uploadExperimentCsv(experimentId, formData) {
-        // 发送 POST 请求到 upload_csv action
-        // axios 会自动处理 FormData 的 Content-Type
-        return apiClient.post(`experiments/${experimentId}/upload_csv/`, formData);
-        // 注意：拦截器会自动处理 FormData 的 Content-Type
+      // 移除开头的 / ，使其与 getExperiment 等函数保持一致
+      return apiClient.post(`experiments/${experimentId}/upload_csv/`, formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+        timeout: 60000
+      });
     },
     // --- 获取 CSV 文件内容 ---
-    getExperimentCsvData(experimentId, metadataId) { // 参数名改为 metadataId 保持一致
-        // 假设后端端点是 /api/experiments/{exp_id}/csv_data/{metadata_id}/
-        // 并且后端返回的是 CSV 文件的原始文本内容
-        return apiClient.get(`experiments/${experimentId}/csv_data/${metadataId}/`);
+    getExperimentCsvData(experimentId, metadataId) {
+      // 移除开头的 /
+      return apiClient.get(`experiments/${experimentId}/csv_data/${metadataId}/`, {
+        timeout: 60000
+      });
     },
     // --- (可选) 通过 Device 端点添加 Experiment ---
     addExperimentToDevice(deviceId, data) {
@@ -181,4 +185,32 @@ export default {
         // DELETE /api/pdf_parser/tasks/<id>/
         return apiClient.delete(`pdf_parser/tasks/${taskId}/`);
     },
+    getTaskGraphData(taskId) {
+      return apiClient.get(`pdf_parser/tasks/${taskId}/graph/`);
+    },
+};
+export const getRawMediaBlob = async (fullUrl) => {
+  const authStore = useAuthStore();
+  const headers = {
+    'ngrok-skip-browser-warning': 'true',
+  };
+  if (authStore.isAuthenticated) {
+    headers['Authorization'] = `Bearer ${authStore.token}`;
+  }
+
+  try {
+    const response = await fetch(fullUrl, {
+      method: 'GET',
+      headers: headers,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch image: ${response.status} ${response.statusText}`);
+    }
+
+    return await response.blob();
+  } catch (error) {
+    console.error(`Error fetching raw media blob from ${fullUrl}:`, error);
+    return null;
+  }
 };
