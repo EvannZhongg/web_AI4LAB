@@ -11,10 +11,8 @@ from .retriever import PgVectorRetriever
 logger = logging.getLogger(__name__)
 
 # --- 缓存 Retriever 实例 ---
-# Django 是多进程的，每个uWSGI/Gunicorn
-# worker进程将拥有自己的 retriever 实例。
-# build_adjacency_list 在初始化时运行。
-# 如果图谱经常更新，应使用更复杂的缓存（如Redis/Django Cache）
+# Django 启动时，每个 Gunicorn/uWSGI worker 进程会创建
+# 一个自己的 retriever_instance 实例，并运行一次 __init__。
 try:
     retriever_instance = PgVectorRetriever()
     logger.info("全局 PgVectorRetriever 实例已初始化。")
@@ -26,17 +24,24 @@ except Exception as e:
 class RAGSearchAPIView(APIView):
     """
     用于 RAG 检索和答案生成的 API 视图。
-    接受 POST 请求: {"query": "..."}
-    返回一个流式响应 (text/event-stream)。
     """
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, *args, **kwargs):
+        global retriever_instance  # 允许我们重新初始化 (如果需要的话)
+
         if not retriever_instance:
-            return Response(
-                {"error": "RAG检索器未初始化，请检查服务器日志。"},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE
-            )
+            # (*** 健壮性修复 ***)
+            # 如果启动时初始化失败，尝试在第一次请求时重新初始化
+            try:
+                retriever_instance = PgVectorRetriever()
+                logger.info("RAGSearchAPIView: 已动态重新初始化 PgVectorRetriever。")
+            except Exception as e:
+                logger.error(f"动态初始化 PgVectorRetriever 失败: {e}", exc_info=True)
+                return Response(
+                    {"error": "RAG检索器未初始化，请检查服务器日志。"},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE
+                )
 
         serializer = RAGQuerySerializer(data=request.data)
         if not serializer.is_valid():
@@ -50,10 +55,14 @@ class RAGSearchAPIView(APIView):
         logger.info(f"RAGSearchAPIView 收到查询: {query}")
 
         try:
-            # 1. 检索 (非流式)
-            # 我们需要先刷新图谱吗？
+            # --- (*** 关键修复 ***) ---
+            #
+            # 移除了在每次请求时都调用的:
             # retriever_instance.adj_list, retriever_instance.edge_map = retriever_instance._build_adjacency_list()
-            # logger.info("RAGSearchAPIView：邻接表已刷新。")
+            #
+            # 我们现在依赖启动时加载的全局 retriever_instance.adj_list
+            #
+            # --- (*** 修复结束 ***) ---
 
             results, diagnostics = retriever_instance.search(
                 query,
@@ -61,7 +70,7 @@ class RAGSearchAPIView(APIView):
                 top_k_paths=top_k_paths
             )
 
-            # 2. 生成 (流式)
+            # 2. 定义流式生成器
             def stream_generator():
                 try:
                     # 首先，发送检索到的上下文（用于前端可视化）
@@ -84,6 +93,10 @@ class RAGSearchAPIView(APIView):
                     )
 
                     for chunk in answer_stream:
+                        if isinstance(chunk, str):  # 处理错误生成器
+                            yield chunk
+                            break
+
                         if chunk.choices:
                             content = chunk.choices[0].delta.content
                             if content:
@@ -100,7 +113,9 @@ class RAGSearchAPIView(APIView):
                     yield f"event: error\ndata: {json.dumps(error_data)}\n\n"
 
             # 返回流式响应
-            return StreamingHttpResponse(stream_generator(), content_type='text/event-stream')
+            response = StreamingHttpResponse(stream_generator(), content_type='text/event-stream')
+            response['X-Accel-Buffering'] = 'no'  # 禁用 Nginx 缓冲
+            return response
 
         except Exception as e:
             logger.error(f"RAG 检索阶段失败: {e}", exc_info=True)
