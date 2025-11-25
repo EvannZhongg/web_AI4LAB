@@ -30,7 +30,7 @@ SECRET_KEY = "django-insecure-6%v%_8@88(8@1xw95_omex_=!vw99l)rp7jrw!bi79k23yc9iu
 DEBUG = True
 
 ALLOWED_HOSTS = [
-    '91970ab25532.ngrok-free.app', # 你的 ngrok 域名
+    'eb2158c07f31.ngrok-free.app', # 你的 ngrok 域名
     'localhost',
     '127.0.0.1',
 ]
@@ -142,7 +142,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # CORS (跨域资源共享) 配置
 CORS_ALLOWED_ORIGINS = [
-    "https://91970ab25532.ngrok-free.app",
+    "https://eb2158c07f31.ngrok-free.app",
     "http://localhost:5173",
     "http://localhost:5174",
     "https://web-demo-dcr.pages.dev", # 你的Cloudflare前端域名
@@ -150,7 +150,7 @@ CORS_ALLOWED_ORIGINS = [
 
 # CSRF 受信来源
 CSRF_TRUSTED_ORIGINS = [
-    "https://91970ab25532.ngrok-free.app",
+    "https://eb2158c07f31.ngrok-free.app",
     "https://web-demo-dcr.pages.dev/", # 你的Cloudflare前端域名
 ]
 
